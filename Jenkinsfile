@@ -79,14 +79,19 @@ pipeline {
             steps {
                 withKubeConfig([credentialsId: 'kubelogin']) {
                     sh """
+                    # Delete existing deployment to force fresh pull
                     kubectl delete deployment asgbuggy-deployment -n devsecops --ignore-not-found=true
                     
+                    # Wait for deletion
                     sleep 10
                     
+                    # Apply deployment with new image
                     kubectl apply -f deployment.yaml -n devsecops
                     
+                    # Wait for rollout
                     kubectl rollout status deployment/asgbuggy-deployment -n devsecops
-
+                    
+                    # Verify pods are running
                     kubectl get pods -n devsecops -l app=asgbuggy
                     """
                 }
@@ -118,6 +123,7 @@ pipeline {
                         
                         echo "Running OWASP ZAP scan against: http://${appUrl}"
                         
+                        // Run ZAP scan using Docker
                         sh """
                             # Create reports directory
                             mkdir -p ${WORKSPACE}/zap-reports
@@ -140,28 +146,39 @@ pipeline {
                             
                             echo "ZAP scan completed"
                             
+                            # List generated files
+                            echo "Files in zap-reports directory:"
                             ls -lah ${WORKSPACE}/zap-reports/
                             
+                            # Copy reports to workspace root
                             if [ -f ${WORKSPACE}/zap-reports/zap_report.html ]; then
                                 cp ${WORKSPACE}/zap-reports/zap_report.html ${WORKSPACE}/
-                                echo "HTML report copied successfully"
+                                echo "HTML report copied successfully to ${WORKSPACE}/zap_report.html"
                             else
                                 echo "Warning: HTML report not found"
                             fi
                             
                             if [ -f ${WORKSPACE}/zap-reports/zap_report.md ]; then
                                 cp ${WORKSPACE}/zap-reports/zap_report.md ${WORKSPACE}/
-                                echo "Markdown report copied successfully"
+                                echo "Markdown report copied successfully to ${WORKSPACE}/zap_report.md"
                             else
                                 echo "Warning: Markdown report not found"
                             fi
+                            
+                            # Verify reports are in workspace
+                            echo "Files in workspace:"
+                            ls -lah ${WORKSPACE}/zap_report.* || echo "No zap_report files found"
                         """
                     }
                 }
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'zap_report.*', allowEmptyArchive: true
+                    script {
+                        echo "Archiving ZAP reports..."
+                        sh 'ls -lah ${WORKSPACE}/ | grep zap || echo "No zap files found in workspace"'
+                    }
+                    archiveArtifacts artifacts: 'zap_report.*', allowEmptyArchive: true, fingerprint: true
                     
                     publishHTML([
                         allowMissing: true,
@@ -179,11 +196,14 @@ pipeline {
     post {
         always {
             echo 'Pipeline execution completed'
-            sh 'rm -rf ${WORKSPACE}/zap-reports || true'
+            echo "Workspace location: ${WORKSPACE}"
+            // Keep reports for manual inspection - comment out cleanup
+            // sh 'rm -rf ${WORKSPACE}/zap-reports || true'
         }
         success {
             echo 'Pipeline executed successfully!'
             echo 'DAST scan completed. Check the ZAP Security Report for vulnerabilities.'
+            echo "View reports at: ${env.BUILD_URL}artifact/zap_report.html"
         }
         failure {
             echo 'Pipeline failed. Check logs for details.'
