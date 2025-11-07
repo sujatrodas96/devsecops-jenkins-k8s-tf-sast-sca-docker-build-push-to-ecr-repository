@@ -11,13 +11,14 @@
     session.removeAttribute("dlpinit");
     ResourceBundle rb = ResourceBundle.getBundle("messages", request.getLocale());
     String permName = rb.getString("label.metaspace");
+    
     String permNameInErrorMsg = permName;
-    String javaVersion = System.getProperty("java.version");
+    String javaVersion = java.lang.System.getProperty("java.version");
     if (javaVersion.startsWith("1.6") || javaVersion.startsWith("1.7")) {
         permName = rb.getString("label.permgen.space");
         permNameInErrorMsg = "PermGen space";
     }
-    String mode = System.getProperty("easybuggy.mode");
+    String mode = java.lang.System.getProperty("easybuggy.mode");
     boolean isOnlyVulnerabilities = mode != null && mode.equalsIgnoreCase("only-vulnerabilities");
 %>
 <!DOCTYPE html>

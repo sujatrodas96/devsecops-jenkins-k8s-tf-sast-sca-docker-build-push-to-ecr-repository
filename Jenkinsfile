@@ -13,6 +13,32 @@ pipeline {
     }
 
     stages {
+        stage('Fix JSP System Import') {
+            steps {
+                script {
+                    echo 'Fixing System class import in index.jsp...'
+                    sh '''
+                    # Backup the original file
+                    cp src/main/webapp/index.jsp src/main/webapp/index.jsp.backup
+                    
+                    # Check if import already exists
+                    if ! grep -q 'page import="java.lang.System"' src/main/webapp/index.jsp; then
+                        echo "Adding System import to index.jsp..."
+                        # Add the import after ResourceBundle import
+                        sed -i '/<%@ page import="java.util.ResourceBundle"%>/a <%@ page import="java.lang.System"%>' src/main/webapp/index.jsp
+                        echo "Import added successfully"
+                    else
+                        echo "System import already exists, skipping..."
+                    fi
+                    
+                    # Verify the change
+                    echo "Verifying the import was added:"
+                    head -10 src/main/webapp/index.jsp | grep -i system || echo "Warning: System import not found!"
+                    '''
+                }
+            }
+        }
+
         stage('SonarQube Analysis') {
             steps {	
                 sh '''
@@ -55,7 +81,6 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 withKubeConfig([credentialsId: 'kubelogin']) {
-                    // Update image in deployment.yaml dynamically
                     sh """
                     kubectl set image deployment/asgbuggy-deployment \
                     asgbuggy=${ECR_URL}/${IMAGE_NAME}:${IMAGE_TAG} \
@@ -64,6 +89,18 @@ pipeline {
                     """
                 }
             }
+        }
+    }
+    
+    post {
+        always {
+            echo 'Pipeline execution completed'
+        }
+        success {
+            echo 'Pipeline executed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed. Check logs for details.'
         }
     }
 }
