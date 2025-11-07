@@ -9,31 +9,21 @@ pipeline {
         AWS_REGION = 'us-east-1'
         ECR_URL = '257278359774.dkr.ecr.us-east-1.amazonaws.com'
         IMAGE_NAME = 'asg'
-        IMAGE_TAG = 'latest'
+        IMAGE_TAG = "${BUILD_NUMBER}" // Use build number instead of 'latest'
     }
 
     stages {
-        stage('Fix JSP System Import') {
+        stage('Cleanup Old Builds') {
             steps {
                 script {
-                    echo 'Fixing System class import in index.jsp...'
+                    echo 'Cleaning up old builds...'
                     sh '''
-                    # Backup the original file
-                    cp src/main/webapp/index.jsp src/main/webapp/index.jsp.backup
+                    # Clean Maven
+                    mvn clean
                     
-                    # Check if import already exists
-                    if ! grep -q 'page import="java.lang.System"' src/main/webapp/index.jsp; then
-                        echo "Adding System import to index.jsp..."
-                        # Add the import after ResourceBundle import
-                        sed -i '/<%@ page import="java.util.ResourceBundle"%>/a <%@ page import="java.lang.System"%>' src/main/webapp/index.jsp
-                        echo "Import added successfully"
-                    else
-                        echo "System import already exists, skipping..."
-                    fi
-                    
-                    # Verify the change
-                    echo "Verifying the import was added:"
-                    head -10 src/main/webapp/index.jsp | grep -i system || echo "Warning: System import not found!"
+                    # Remove old Docker images
+                    docker rmi ${ECR_URL}/${IMAGE_NAME}:latest || true
+                    docker system prune -f
                     '''
                 }
             }
@@ -54,7 +44,11 @@ pipeline {
         stage('Build Docker Image') { 
             steps { 
                 script {
-                    sh "docker build -t ${ECR_URL}/${IMAGE_NAME}:${IMAGE_TAG} ."
+                    echo "Building Docker image with tag: ${IMAGE_TAG}"
+                    sh """
+                    docker build --no-cache -t ${ECR_URL}/${IMAGE_NAME}:${IMAGE_TAG} .
+                    docker tag ${ECR_URL}/${IMAGE_NAME}:${IMAGE_TAG} ${ECR_URL}/${IMAGE_NAME}:latest
+                    """
                 }
             }
         }
@@ -73,7 +67,10 @@ pipeline {
         stage('Push to AWS ECR') {
             steps {
                 script {
-                    sh "docker push ${ECR_URL}/${IMAGE_NAME}:${IMAGE_TAG}"
+                    sh """
+                    docker push ${ECR_URL}/${IMAGE_NAME}:${IMAGE_TAG}
+                    docker push ${ECR_URL}/${IMAGE_NAME}:latest
+                    """
                 }
             }
         }
@@ -82,10 +79,20 @@ pipeline {
             steps {
                 withKubeConfig([credentialsId: 'kubelogin']) {
                     sh """
-                    kubectl set image deployment/asgbuggy-deployment \
-                    asgbuggy=${ECR_URL}/${IMAGE_NAME}:${IMAGE_TAG} \
-                    -n devsecops
+                    # Delete existing deployment to force fresh pull
+                    kubectl delete deployment asgbuggy-deployment -n devsecops --ignore-not-found=true
+                    
+                    # Wait for deletion
+                    sleep 10
+                    
+                    # Apply deployment with new image
+                    kubectl apply -f deployment.yaml -n devsecops
+                    
+                    # Wait for rollout
                     kubectl rollout status deployment/asgbuggy-deployment -n devsecops
+                    
+                    # Verify pods are running
+                    kubectl get pods -n devsecops -l app=asgbuggy
                     """
                 }
             }
