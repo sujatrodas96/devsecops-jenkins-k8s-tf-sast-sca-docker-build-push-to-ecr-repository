@@ -79,19 +79,14 @@ pipeline {
             steps {
                 withKubeConfig([credentialsId: 'kubelogin']) {
                     sh """
-                    # Delete existing deployment to force fresh pull
                     kubectl delete deployment asgbuggy-deployment -n devsecops --ignore-not-found=true
                     
-                    # Wait for deletion
                     sleep 10
                     
-                    # Apply deployment with new image
                     kubectl apply -f deployment.yaml -n devsecops
                     
-                    # Wait for rollout
                     kubectl rollout status deployment/asgbuggy-deployment -n devsecops
-                    
-                    # Verify pods are running
+
                     kubectl get pods -n devsecops -l app=asgbuggy
                     """
                 }
@@ -123,44 +118,58 @@ pipeline {
                         
                         echo "Running OWASP ZAP scan against: http://${appUrl}"
                         
-                        // Run ZAP scan using Docker
                         sh """
-                            # Create reports directory if it doesn't exist
+                            # Create reports directory
                             mkdir -p ${WORKSPACE}/zap-reports
+                            
+                            # Set proper permissions
+                            chmod 777 ${WORKSPACE}/zap-reports
+                            
+                            echo "Starting ZAP scan..."
                             
                             # Run ZAP baseline scan
                             docker run --rm \
                                 -v ${WORKSPACE}/zap-reports:/zap/wrk:rw \
-                                -t owasp/zap2docker-stable \
+                                -u zap \
+                                owasp/zap2docker-stable \
                                 zap-baseline.py \
                                 -t http://${appUrl} \
                                 -r zap_report.html \
-                                -x zap_report.xml \
-                                -J zap_report.json \
+                                -w zap_report.md \
                                 -I || true
                             
-                            # Move reports to workspace root for archiving
-                            mv ${WORKSPACE}/zap-reports/zap_report.html ${WORKSPACE}/ || true
-                            mv ${WORKSPACE}/zap-reports/zap_report.xml ${WORKSPACE}/ || true
-                            mv ${WORKSPACE}/zap-reports/zap_report.json ${WORKSPACE}/ || true
+                            echo "ZAP scan completed"
+                            
+                            ls -lah ${WORKSPACE}/zap-reports/
+                            
+                            if [ -f ${WORKSPACE}/zap-reports/zap_report.html ]; then
+                                cp ${WORKSPACE}/zap-reports/zap_report.html ${WORKSPACE}/
+                                echo "HTML report copied successfully"
+                            else
+                                echo "Warning: HTML report not found"
+                            fi
+                            
+                            if [ -f ${WORKSPACE}/zap-reports/zap_report.md ]; then
+                                cp ${WORKSPACE}/zap-reports/zap_report.md ${WORKSPACE}/
+                                echo "Markdown report copied successfully"
+                            else
+                                echo "Warning: Markdown report not found"
+                            fi
                         """
                     }
                 }
             }
             post {
                 always {
-                    // Archive ZAP reports
                     archiveArtifacts artifacts: 'zap_report.*', allowEmptyArchive: true
                     
-                    // Publish HTML report
                     publishHTML([
                         allowMissing: true,
                         alwaysLinkToLastBuild: true,
                         keepAll: true,
                         reportDir: '.',
                         reportFiles: 'zap_report.html',
-                        reportName: 'OWASP ZAP Security Report',
-                        reportTitles: 'ZAP Scan Report'
+                        reportName: 'ZAP Security Report'
                     ])
                 }
             }
@@ -170,7 +179,6 @@ pipeline {
     post {
         always {
             echo 'Pipeline execution completed'
-            // Cleanup ZAP reports directory
             sh 'rm -rf ${WORKSPACE}/zap-reports || true'
         }
         success {
